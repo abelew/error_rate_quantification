@@ -5,9 +5,9 @@ and invocation of some methods used to quantify reverse transcriptase error rate
 
 It combines the results from two small packages I wrote, one for pre-processing the data:
 
-[https://github.com/abelew/errrt](errrt) and one for post-processing:
+[errrt](https://github.com/abelew/errrt) and one for post-processing:
 
-[https://github.com/abelew/Rerrrt](Rerrrt).
+[Rerrrt](https://github.com/abelew/Rerrrt).
 
 The file errrt_readme.md is the markdown README from the former, which lays out the process, 
 installation, and invocation of the tools used to process the reads into a series of
