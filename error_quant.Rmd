@@ -57,7 +57,7 @@ pre {
 
 ```{r options, include=FALSE}
 library("hpgltools")
-tt <- devtools::load_all("/data/hpgltools")
+tt <- devtools::load_all("~/hpgltools")
 knitr::opts_knit$set(width=120,
                      progress=TRUE,
                      verbose=TRUE,
@@ -69,11 +69,11 @@ old_options <- options(digits=4,
                        knitr.duplicate.label="allow")
 ggplot2::theme_set(ggplot2::theme_bw(base_size=10))
 rundate <- format(Sys.Date(), format="%Y%m%d")
-previous_file <- "index.Rmd"
-ver <- "20200314"
+previous_file <- "tag.Rmd"
+ver <- "202106"
 
 ##tmp <- sm(loadme(filename=paste0(gsub(pattern="\\.Rmd", replace="", x=previous_file), "-v", ver, ".rda.xz")))
-rmd_file <- "error_quant.Rmd"
+rmd_file <- "error_quant_202106.Rmd"
 ```
 
 # Calculating error rates.
@@ -82,75 +82,662 @@ I wrote the function 'create_matrices()' to collect mutation counts.  At least
 in theory the results from it should be able to address most/any question
 regarding the counts of mutations observed in the data.
 
-## Categorize the data with at least 3 indexes per mutant
+For the moment at least, the only real change here is that we are
+getting ready to submit this for publication and we added a filter for
+hyper-mutated reads.  I think that has been successfully implemented
+and so will run a fresh invocation of this.
 
-```{r triples}
+# An offset
+
+Previous experiments using similar constructs numbered the positions
+of mutations slightly differently.  Here is the explanation from
+Dr. DeStefano:
+
+Number 6 in the (previous?) paper corresponds to number 22 in our
+analysis.  Re-number based on that would work great. 
+
+So... we should have an offset of 22 - x = 6, or -16.
+
+As a result of this, I will remove 16 from the minimum/maximum filters.
+
+# Recent samples
+
+Each of these blocks of code produce extremely verbose outputs.  The
+provide tables of how many mutations were observed per read, how many
+reads are filtered at each step in the process, then information about
+the categorization of mutations in the filtered data.
+
+```{r 01params}
 devtools::load_all("Rerrrt")
-sample_sheet <- "sample_sheets/all_samples.xlsx"
 ident_column <- "identtable"
 mut_column <- "mutationtable"
 min_reads <- 3
-min_indexes <- 3
-min_sequencer <- 10
-min_position <- 24
-max_position <- 176
+min_tags <- 3
+min_sequencer <- 6
+## I made this the default argument for the function, so will not change my calls.
+position_offset <- -16
+min_position <- 6
+max_position <- 169
 max_mutations_per_read <- NULL
 prune_n <- TRUE
 verbose <- TRUE
-excel <- glue::glue("excel/{rundate}_triples-v{ver}.xlsx")
-triples <- create_matrices(sample_sheet=sample_sheet,
-                           ident_column=ident_column, mut_column=mut_column,
-                           min_reads=min_reads, min_indexes=min_indexes,
-                           min_sequencer=min_sequencer,
-                           min_position=min_position, max_position=max_position,
-                           prune_n=prune_n, verbose=verbose, excel=excel)
-
-max_mutations_per_read <- 10
-excel <- glue::glue("excel/{rundate}_triples_tenmpr-v{ver}.xlsx")
-triples_tenmpr <- create_matrices(sample_sheet=sample_sheet,
-                                  ident_column=ident_column, mut_column=mut_column,
-                                  min_reads=min_reads, min_indexes=min_indexes,
-                                  min_sequencer=min_sequencer,
-                                  min_position=min_position, max_position=max_position,
-                                  prune_n=prune_n, verbose=verbose, excel=excel)
-max_mutations_per_read <- 5
-excel <- glue::glue("excel/{rundate}_triples_fivempr-v{ver}.xlsx")
-triples_fivempr <- create_matrices(sample_sheet=sample_sheet,
-                                   ident_column=ident_column, mut_column=mut_column,
-                                   min_reads=min_reads, min_indexes=min_indexes,
-                                   min_sequencer=min_sequencer,
-                                   min_position=min_position, max_position=max_position,
-                                   prune_n=prune_n, verbose=verbose, excel=excel)
+plot_order <- c("dna_control", "dna_low", "dna_high", "rna_control", "rna_low", "rna_high")
+type <- "recent"
+sample_sheet <- glue("sample_sheets/{type}_samples_2020.xlsx")
+excel <- glue("excel/{rundate}_{type}_{min_reads}minread_{min_tags}mtags_{min_sequencer}minseq_{min_position}minpos_{max_position}maxpos")
+if (!is.null(max_mutations_per_read)) {
+  excel <- glue("{excel}_{max_mutations_per_read}mpr")
+}
+if (isTRUE(prune_n)) {
+  excel <- glue("{excel}_prune")
+}
+excel <- glue("{excel}-v{ver}.xlsx")
 ```
 
-## Categorize the data with at least 5 indexes per mutant
+## 3 min reads, 3 min tags, 6 sequencer, No MPR, 22<=pos<=185
 
-```{r quints}
-min_indexes <- 5
-max_mutations_per_read <- NULL
-excel <- glue::glue("excel/{rundate}_quints-v{ver}.xlsx")
-quints <- create_matrices(sample_sheet=sample_sheet,
-                          ident_column=ident_column, mut_column=mut_column,
-                          min_reads=min_reads, min_indexes=min_indexes,
-                          min_sequencer=min_sequencer,
-                          min_position=min_position, max_position=max_position,
-                          prune_n=prune_n, verbose=verbose, excel=excel)
+For this first iteration we will use the following criteria:
+
+1.  There must be at least 3 reads to consider an tag.
+2.  There must be at least 3 tags to consider a mutation.
+3.  In order for a mutation to be considered sequencer based, it must
+    be present in exactly 1 of at least 6 reads in a tag group.
+4.  We will ignore anything before position 22.
+5.  We will ignore anything after position 185.
+6.  We will not have a maximum number of mutations per read.
+7.  We will prune any Ns in the reads.
+8.  This analysis will include the 'recent' samples, which includes
+    groups of controls for both DNA and RNA as well samples where high
+    and low concentrations of Magnesium was included.
+
+```{r 01triples}
+recent_3mr_3mi_6s_0mpr <- create_matrices(
+    sample_sheet=sample_sheet,
+    ident_column=ident_column,
+    mut_column=mut_column,
+    min_reads=min_reads,
+    min_tags=min_tags,
+    min_sequencer=min_sequencer,
+    max_mutations_per_read=max_mutations_per_read,
+    min_position=min_position,
+    max_position=max_position,
+    prune_n=prune_n,
+    verbose=verbose,
+    excel=excel)
+```
+
+I am now collecting a histogram of the reads/tag before and I guess after processing:
+
+```{r histogram1}
+recent_3mr_3mi_6s_0mpr[["preprocessed_hist"]]
+```
+
+```{r 02recent_mutation_tag_count, results='asis'}
+## Raw matrices
+for (t in 1:length(recent_3mr_3mi_6s_0mpr[["matrices"]])) {
+  table_name <- names(recent_3mr_3mi_6s_0mpr[["matrices"]])[t]
+  message("Raw table: ", table_name, ".")
+  print(knitr::kable(recent_3mr_3mi_6s_0mpr[["matrices"]][table_name]))
+  if (!is.null(recent_3mr_3mi_6s_0mpr[["plots"]][["matrices"]][[table_name]])) {
+    plot(recent_3mr_3mi_6s_0mpr[["plots"]][["matrices"]][[table_name]])
+  }
+}
+
+## Matrices normalized by CPM length
+for (t in 1:length(recent_3mr_3mi_6s_0mpr[["matrices_cpmlength"]])) {
+  table_name <- names(recent_3mr_3mi_6s_0mpr[["matrices_cpmlength"]])[t]
+  message("CPM length table: ", table_name, ".")
+  print(knitr::kable(recent_3mr_3mi_6s_0mpr[["matrices_cpmlength"]][table_name]))
+  if (!is.null(recent_3mr_3mi_6s_0mpr[["plots"]][["matrices_cpmlength"]][[table_name]])) {
+    plot(recent_3mr_3mi_6s_0mpr[["plots"]][["matrices_cpmlength"]][[table_name]])
+  }
+}
+## Matrices normalized by counts length
+for (t in 1:length(recent_3mr_3mi_6s_0mpr[["matrices_counts"]])) {
+  table_name <- names(recent_3mr_3mi_6s_0mpr[["matrices_counts"]])[t]
+  message("Counts table: ", table_name, ".")
+  print(knitr::kable(recent_3mr_3mi_6s_0mpr[["matrices_counts"]][table_name]))
+  if (!is.null(recent_3mr_3mi_6s_0mpr[["plots"]][["matrices_counts"]][[table_name]])) {
+    plot(recent_3mr_3mi_6s_0mpr[["plots"]][["matrices_counts"]][[t]])
+  }
+}
+
+rm(recent_3mr_3mi_6s_0mpr)
+```
+
+# All samples
+
+## 3 min reads, 3 min tags, 6 sequencer, No MPR, 22<=pos<=185
+
+```{r 04all_triples}
+## Repeat the same parameters using all samples
+sample_sheet <- "sample_sheets/all_samples_202101.xlsx"
+type <- "all"
+excel <- glue("excel/{rundate}_{type}_{min_reads}minread_{min_tags}mtags_{min_sequencer}minseq_{min_position}minpos_{max_position}maxpos")
+if (!is.null(max_mutations_per_read)) {
+  excel <- glue("{excel}_{max_mutations_per_read}mpr")
+}
+if (isTRUE(prune_n)) {
+  excel <- glue("{excel}_prune")
+}
+excel <- glue("{excel}-v{ver}.xlsx")
+all_3mr_3mi_6s_0mpr <- create_matrices(
+    sample_sheet=sample_sheet,
+    ident_column=ident_column,
+    mut_column=mut_column,
+    min_reads=min_reads,
+    min_tags=min_tags,
+    min_sequencer=min_sequencer,
+    max_mutations_per_read=max_mutations_per_read,
+    min_position=min_position,
+    max_position=max_position,
+    prune_n=prune_n,
+    verbose=verbose,
+    excel=excel)
+
+all_3mr_3mi_6s_0mpr[["preprocessed_hist"]]
+```
+
+```{r 05all_mutation_tag_count, results='asis'}
+## Raw matrices
+for (t in 1:length(all_3mr_3mi_6s_0mpr[["matrices"]])) {
+  table_name <- names(all_3mr_3mi_6s_0mpr[["matrices"]])[t]
+  message("Raw table: ", table_name, ".")
+  print(knitr::kable(all_3mr_3mi_6s_0mpr[["matrices"]][table_name]))
+  if (!is.null(all_3mr_3mi_6s_0mpr[["plots"]][["matrices"]][[table_name]])) {
+    plot(all_3mr_3mi_6s_0mpr[["plots"]][["matrices"]][[table_name]])
+  }
+}
+
+## Matrices normalized by CPM length
+for (t in 1:length(all_3mr_3mi_6s_0mpr[["matrices_cpmlength"]])) {
+  table_name <- names(all_3mr_3mi_6s_0mpr[["matrices_cpmlength"]])[t]
+  message("CPM length table: ", table_name, ".")
+  print(knitr::kable(all_3mr_3mi_6s_0mpr[["matrices_cpmlength"]][table_name]))
+  if (!is.null(all_3mr_3mi_6s_0mpr[["plots"]][["matrices_cpmlength"]][[table_name]])) {
+    plot(all_3mr_3mi_6s_0mpr[["plots"]][["matrices_cpmlength"]][[table_name]])
+  }
+}
+## Matrices normalized by counts length
+for (t in 1:length(all_3mr_3mi_6s_0mpr[["matrices_counts"]])) {
+  table_name <- names(all_3mr_3mi_6s_0mpr[["matrices_counts"]])[t]
+  message("Counts table: ", table_name, ".")
+  print(knitr::kable(all_3mr_3mi_6s_0mpr[["matrices_counts"]][table_name]))
+  if (!is.null(all_3mr_3mi_6s_0mpr[["plots"]][["matrices_counts"]][[table_name]])) {
+    plot(all_3mr_3mi_6s_0mpr[["plots"]][["matrices_counts"]][[t]])
+  }
+}
+
+rm(all_3mr_3mi_6s_0mpr)
+```
+
+# RNA samples
+
+## 3 min reads, 3 min tags, 6 sequencer, No MPR, 22<=pos<=185
+
+```{r 06only_recent_triples}
+## Repeat with only the recent RNA samples
+sample_sheet <- "sample_sheets/rna_samples_202101.xlsx"
+type <- "rna"
+
+excel <- glue("excel/{rundate}_{type}_{min_reads}minread_{min_tags}mtags_{min_sequencer}minseq_{min_position}minpos_{max_position}maxpos")
+if (!is.null(max_mutations_per_read)) {
+  excel <- glue("{excel}_{max_mutations_per_read}mpr")
+}
+if (isTRUE(prune_n)) {
+  excel <- glue("{excel}_prune")
+}
+excel <- glue("{excel}-v{ver}.xlsx")
+
+rna_3mr_3mi_6s_0mpr <- create_matrices(
+    sample_sheet=sample_sheet,
+    ident_column=ident_column,
+    mut_column=mut_column,
+    min_reads=min_reads,
+    min_tags=min_tags,
+    min_sequencer=min_sequencer,
+    max_mutations_per_read=max_mutations_per_read,
+    min_position=min_position,
+    max_position=max_position,
+    prune_n=prune_n,
+    verbose=verbose,
+    excel=excel)
+
+rna_3mr_3mi_6s_0mpr[["processed_hist"]]
+```
+
+```{r 08rna_mutation_tag_count, results='asis'}
+## Raw matrices
+for (t in 1:length(rna_3mr_3mi_6s_0mpr[["matrices"]])) {
+  table_name <- names(rna_3mr_3mi_6s_0mpr[["matrices"]])[t]
+  message("Raw table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_3mi_6s_0mpr[["matrices"]][table_name]))
+  if (!is.null(rna_3mr_3mi_6s_0mpr[["plots"]][["matrices"]][[table_name]])) {
+    plot(rna_3mr_3mi_6s_0mpr[["plots"]][["matrices"]][[table_name]])
+  }
+}
+
+## Matrices normalized by CPM length
+for (t in 1:length(rna_3mr_3mi_6s_0mpr[["matrices_cpmlength"]])) {
+  table_name <- names(rna_3mr_3mi_6s_0mpr[["matrices_cpmlength"]])[t]
+  message("CPM length table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_3mi_6s_0mpr[["matrices_cpmlength"]][table_name]))
+  if (!is.null(rna_3mr_3mi_6s_0mpr[["plots"]][["matrices_cpmlength"]][[table_name]])) {
+    plot(rna_3mr_3mi_6s_0mpr[["plots"]][["matrices_cpmlength"]][[table_name]])
+  }
+}
+## Matrices normalized by counts length
+for (t in 1:length(rna_3mr_3mi_6s_0mpr[["matrices_counts"]])) {
+  table_name <- names(rna_3mr_3mi_6s_0mpr[["matrices_counts"]])[t]
+  message("Counts table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_3mi_6s_0mpr[["matrices_counts"]][table_name]))
+  if (!is.null(rna_3mr_3mi_6s_0mpr[["plots"]][["matrices_counts"]][[table_name]])) {
+    plot(rna_3mr_3mi_6s_0mpr[["plots"]][["matrices_counts"]][[t]])
+  }
+}
+
+rm(rna_3mr_3mi_6s_0mpr)
+```
+
+# RNA samples
+
+## 3 min reads, 3 min tags, 6 sequencer, 10 MPR, 22<=pos<=185
+
+```{r 10rna_ten_mpr}
 max_mutations_per_read <- 10
-excel <- glue::glue("excel/{rundate}_quints_tenmpr-v{ver}.xlsx")
-quints_tenmpr <- create_matrices(sample_sheet=sample_sheet,
-                                 ident_column=ident_column, mut_column=mut_column,
-                                 min_reads=min_reads, min_indexes=min_indexes,
-                                 min_sequencer=min_sequencer,
-                                 min_position=min_position, max_position=max_position,
-                                 prune_n=prune_n, verbose=verbose, excel=excel)
+
+excel <- glue("excel/{rundate}_{type}_{min_reads}minread_{min_tags}mtags_{min_sequencer}minseq_{min_position}minpos_{max_position}maxpos")
+if (!is.null(max_mutations_per_read)) {
+  excel <- glue("{excel}_{max_mutations_per_read}mpr")
+}
+if (isTRUE(prune_n)) {
+  excel <- glue("{excel}_prune")
+}
+excel <- glue("{excel}-v{ver}.xlsx")
+
+rna_3mr_3mi_6s_10mpr <- create_matrices(
+    sample_sheet=sample_sheet,
+    ident_column=ident_column,
+    mut_column=mut_column,
+    min_reads=min_reads,
+    min_tags=min_tags,
+    min_sequencer=min_sequencer,
+    max_mutations_per_read=max_mutations_per_read,
+    min_position=min_position,
+    max_position=max_position,
+    prune_n=prune_n,
+    verbose=verbose,
+    excel=excel)
+
+rna_3mr_3mi_6s_10mpr[["processed_hist"]]
+```
+
+```{r 11rna_mutation_tag_count, results='asis'}
+## Raw matrices
+for (t in 1:length(rna_3mr_3mi_6s_10mpr[["matrices"]])) {
+  table_name <- names(rna_3mr_3mi_6s_10mpr[["matrices"]])[t]
+  message("Raw table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_3mi_6s_10mpr[["matrices"]][table_name]))
+  if (!is.null(rna_3mr_3mi_6s_10mpr[["plots"]][["matrices"]][[table_name]])) {
+    plot(rna_3mr_3mi_6s_10mpr[["plots"]][["matrices"]][[table_name]])
+  }
+}
+
+## Matrices normalized by CPM length
+for (t in 1:length(rna_3mr_3mi_6s_10mpr[["matrices_cpmlength"]])) {
+  table_name <- names(rna_3mr_3mi_6s_10mpr[["matrices_cpmlength"]])[t]
+  message("CPM length table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_3mi_6s_10mpr[["matrices_cpmlength"]][table_name]))
+  if (!is.null(rna_3mr_3mi_6s_10mpr[["plots"]][["matrices_cpmlength"]][[table_name]])) {
+    plot(rna_3mr_3mi_6s_10mpr[["plots"]][["matrices_cpmlength"]][[table_name]])
+  }
+}
+## Matrices normalized by counts length
+for (t in 1:length(rna_3mr_3mi_6s_10mpr[["matrices_counts"]])) {
+  table_name <- names(rna_3mr_3mi_6s_10mpr[["matrices_counts"]])[t]
+  message("Counts table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_3mi_6s_10mpr[["matrices_counts"]][table_name]))
+  if (!is.null(rna_3mr_3mi_6s_10mpr[["plots"]][["matrices_counts"]][[table_name]])) {
+    plot(rna_3mr_3mi_6s_10mpr[["plots"]][["matrices_counts"]][[t]])
+  }
+}
+
+rm(rna_3mr_3mi_6s_10mpr)
+```
+
+# RNA samples
+
+## 3 min reads, 3 min tags, 6 sequencer, 5 MPR, 22<=pos<=185
+
+```{r 12rna_triples_fivempr}
 max_mutations_per_read <- 5
-excel <- glue::glue("excel/{rundate}_quints_fivempr-v{ver}.xlsx")
-quints_fivempr <- create_matrices(sample_sheet=sample_sheet,
-                                  ident_column=ident_column, mut_column=mut_column,
-                                  min_reads=min_reads, min_indexes=min_indexes,
-                                  min_sequencer=min_sequencer,
-                                  min_position=min_position, max_position=max_position,
-                                  prune_n=prune_n, verbose=verbose, excel=excel)
+
+excel <- glue("excel/{rundate}_{type}_{min_reads}minread_{min_tags}mtags_{min_sequencer}minseq_{min_position}minpos_{max_position}maxpos")
+if (!is.null(max_mutations_per_read)) {
+  excel <- glue("{excel}_{max_mutations_per_read}mpr")
+}
+if (isTRUE(prune_n)) {
+  excel <- glue("{excel}_prune")
+}
+excel <- glue("{excel}-v{ver}.xlsx")
+
+rna_3mr_3mi_6s_5mpr <- create_matrices(
+    sample_sheet=sample_sheet,
+    ident_column=ident_column,
+    mut_column=mut_column,
+    min_reads=min_reads,
+    min_tags=min_tags,
+    min_sequencer=min_sequencer,
+    max_mutations_per_read=max_mutations_per_read,
+    min_position=min_position,
+    max_position=max_position,
+    prune_n=prune_n,
+    verbose=verbose,
+    excel=excel)
+
+rna_3mr_3mi_6s_5mpr[["processed_hist"]]
+```
+
+```{r 13rna_mutation_tag_count, results='asis'}
+## Raw matrices
+for (t in 1:length(rna_3mr_3mi_6s_5mpr[["matrices"]])) {
+  table_name <- names(rna_3mr_3mi_6s_5mpr[["matrices"]])[t]
+  message("Raw table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_3mi_6s_5mpr[["matrices"]][table_name]))
+  if (!is.null(rna_3mr_3mi_6s_5mpr[["plots"]][["matrices"]][[table_name]])) {
+    plot(rna_3mr_3mi_6s_5mpr[["plots"]][["matrices"]][[table_name]])
+  }
+}
+
+## Matrices normalized by CPM length
+for (t in 1:length(rna_3mr_3mi_6s_5mpr[["matrices_cpmlength"]])) {
+  table_name <- names(rna_3mr_3mi_6s_5mpr[["matrices_cpmlength"]])[t]
+  message("CPM length table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_3mi_6s_5mpr[["matrices_cpmlength"]][table_name]))
+  if (!is.null(rna_3mr_3mi_6s_5mpr[["plots"]][["matrices_cpmlength"]][[table_name]])) {
+    plot(rna_3mr_3mi_6s_5mpr[["plots"]][["matrices_cpmlength"]][[table_name]])
+  }
+}
+## Matrices normalized by counts length
+for (t in 1:length(rna_3mr_3mi_6s_5mpr[["matrices_counts"]])) {
+  table_name <- names(rna_3mr_3mi_6s_5mpr[["matrices_counts"]])[t]
+  message("Counts table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_3mi_6s_5mpr[["matrices_counts"]][table_name]))
+  if (!is.null(rna_3mr_3mi_6s_5mpr[["plots"]][["matrices_counts"]][[table_name]])) {
+    plot(rna_3mr_3mi_6s_5mpr[["plots"]][["matrices_counts"]][[t]])
+  }
+}
+
+rm(rna_3mr_3mi_6s_5mpr)
+```
+
+# RNA samples
+
+## 3 min reads, 5 min tags, 6 sequencer, No MPR, 22<=pos<=185
+
+```{r 15quints}
+min_tags <- 5
+max_mutations_per_read <- NULL
+type <- "recent"
+
+excel <- glue("excel/{rundate}_{type}_{min_reads}minread_{min_tags}mtags_{min_sequencer}minseq_{min_position}minpos_{max_position}maxpos")
+if (!is.null(max_mutations_per_read)) {
+  excel <- glue("{excel}_{max_mutations_per_read}mpr")
+}
+if (isTRUE(prune_n)) {
+  excel <- glue("{excel}_prune")
+}
+excel <- glue("{excel}-v{ver}.xlsx")
+
+rna_3mr_5mi_6s_0mpr <- create_matrices(
+    sample_sheet=sample_sheet,
+    ident_column=ident_column,
+    mut_column=mut_column,
+    min_reads=min_reads,
+    min_tags=min_tags,
+    min_sequencer=min_sequencer,
+    max_mutations_per_read=max_mutations_per_read,
+    min_position=min_position,
+    max_position=max_position,
+    prune_n=prune_n,
+    verbose=verbose,
+    excel=excel)
+
+rna_3mr_5mi_6s_0mpr[["processed_hist"]]
+```
+
+
+```{r 16rna_mutation_tag_count, results='asis'}
+## Raw matrices
+for (t in 1:length(rna_3mr_5mi_6s_0mpr[["matrices"]])) {
+  table_name <- names(rna_3mr_5mi_6s_0mpr[["matrices"]])[t]
+  message("Raw table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_5mi_6s_0mpr[["matrices"]][table_name]))
+  if (!is.null(rna_3mr_5mi_6s_0mpr[["plots"]][["matrices"]][[table_name]])) {
+    plot(rna_3mr_5mi_6s_0mpr[["plots"]][["matrices"]][[table_name]])
+  }
+}
+
+## Matrices normalized by CPM length
+for (t in 1:length(rna_3mr_5mi_6s_0mpr[["matrices_cpmlength"]])) {
+  table_name <- names(rna_3mr_5mi_6s_0mpr[["matrices_cpmlength"]])[t]
+  message("CPM length table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_5mi_6s_0mpr[["matrices_cpmlength"]][table_name]))
+  if (!is.null(rna_3mr_5mi_6s_0mpr[["plots"]][["matrices_cpmlength"]][[table_name]])) {
+    plot(rna_3mr_5mi_6s_0mpr[["plots"]][["matrices_cpmlength"]][[table_name]])
+  }
+}
+## Matrices normalized by counts length
+for (t in 1:length(rna_3mr_5mi_6s_0mpr[["matrices_counts"]])) {
+  table_name <- names(rna_3mr_5mi_6s_0mpr[["matrices_counts"]])[t]
+  message("Counts table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_5mi_6s_0mpr[["matrices_counts"]][table_name]))
+  if (!is.null(rna_3mr_5mi_6s_0mpr[["plots"]][["matrices_counts"]][[table_name]])) {
+    plot(rna_3mr_5mi_6s_0mpr[["plots"]][["matrices_counts"]][[t]])
+  }
+}
+
+rm(rna_3mr_5mi_6s_0mpr)
+```
+
+# RNA samples
+
+## 3 min reads, 5 min tags, 6 sequencer, 10 MPR, 22<=pos<=185
+
+```{r 17rna_tenmpr}
+max_mutations_per_read <- 10
+
+excel <- glue("excel/{rundate}_{type}_{min_reads}minread_{min_tags}mtags_{min_sequencer}minseq_{min_position}minpos_{max_position}maxpos")
+if (!is.null(max_mutations_per_read)) {
+  excel <- glue("{excel}_{max_mutations_per_read}mpr")
+}
+if (isTRUE(prune_n)) {
+  excel <- glue("{excel}_prune")
+}
+excel <- glue("{excel}-v{ver}.xlsx")
+
+rna_3mr_5mi_6s_10mpr <- create_matrices(
+    sample_sheet=sample_sheet,
+    ident_column=ident_column,
+    mut_column=mut_column,
+    min_reads=min_reads,
+    min_tags=min_tags,
+    min_sequencer=min_sequencer,
+    max_mutations_per_read=max_mutations_per_read,
+    min_position=min_position,
+    max_position=max_position,
+    prune_n=prune_n,
+    verbose=verbose,
+    excel=excel)
+
+rna_3mr_5mi_6s_10mpr[["processed_hist"]]
+```
+
+```{r 18rna_mutation_tag_count, results='asis'}
+## Raw matrices
+for (t in 1:length(rna_3mr_5mi_6s_10mpr[["matrices"]])) {
+  table_name <- names(rna_3mr_5mi_6s_10mpr[["matrices"]])[t]
+  message("Raw table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_5mi_6s_10mpr[["matrices"]][table_name]))
+  if (!is.null(rna_3mr_5mi_6s_10mpr[["plots"]][["matrices"]][[table_name]])) {
+    plot(rna_3mr_5mi_6s_10mpr[["plots"]][["matrices"]][[table_name]])
+  }
+}
+
+## Matrices normalized by CPM length
+for (t in 1:length(rna_3mr_5mi_6s_10mpr[["matrices_cpmlength"]])) {
+  table_name <- names(rna_3mr_5mi_6s_10mpr[["matrices_cpmlength"]])[t]
+  message("CPM length table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_5mi_6s_10mpr[["matrices_cpmlength"]][table_name]))
+  if (!is.null(rna_3mr_5mi_6s_10mpr[["plots"]][["matrices_cpmlength"]][[table_name]])) {
+    plot(rna_3mr_5mi_6s_10mpr[["plots"]][["matrices_cpmlength"]][[table_name]])
+  }
+}
+## Matrices normalized by counts length
+for (t in 1:length(rna_3mr_5mi_6s_10mpr[["matrices_counts"]])) {
+  table_name <- names(rna_3mr_5mi_6s_10mpr[["matrices_counts"]])[t]
+  message("Counts table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_5mi_6s_10mpr[["matrices_counts"]][table_name]))
+  if (!is.null(rna_3mr_5mi_6s_10mpr[["plots"]][["matrices_counts"]][[table_name]])) {
+    plot(rna_3mr_5mi_6s_10mpr[["plots"]][["matrices_counts"]][[t]])
+  }
+}
+
+rm(rna_3mr_5mi_6s_10mpr)
+```
+
+# RNA samples
+
+## 3 min reads, 5 min tags, 6 sequencer, 5 MPR, 22<=pos<=185
+
+```{r 20rna_givesdf}
+max_mutations_per_read <- 5
+
+excel <- glue("excel/{rundate}_{type}_{min_reads}minread_{min_tags}mtags_{min_sequencer}minseq_{min_position}minpos_{max_position}maxpos")
+if (!is.null(max_mutations_per_read)) {
+  excel <- glue("{excel}_{max_mutations_per_read}mpr")
+}
+if (isTRUE(prune_n)) {
+  excel <- glue("{excel}_prune")
+}
+excel <- glue("{excel}-v{ver}.xlsx")
+
+rna_3mr_5mi_6s_5mpr <- create_matrices(
+    sample_sheet=sample_sheet,
+    ident_column=ident_column,
+    mut_column=mut_column,
+    min_reads=min_reads,
+    min_tags=min_tags,
+    min_sequencer=min_sequencer,
+    max_mutations_per_read=max_mutations_per_read,
+    min_position=min_position,
+    max_position=max_position,
+    prune_n=prune_n,
+    verbose=verbose,
+    excel=excel)
+
+rna_3mr_5mi_6s_5mpr[["processed_hist"]]
+```
+
+
+```{r 21rna_mutation_tag_count, results='asis'}
+## Raw matrices
+for (t in 1:length(rna_3mr_5mi_6s_5mpr[["matrices"]])) {
+  table_name <- names(rna_3mr_5mi_6s_5mpr[["matrices"]])[t]
+  message("Raw table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_5mi_6s_5mpr[["matrices"]][table_name]))
+  if (!is.null(rna_3mr_5mi_6s_5mpr[["plots"]][["matrices"]][[table_name]])) {
+    plot(rna_3mr_5mi_6s_5mpr[["plots"]][["matrices"]][[table_name]])
+  }
+}
+
+## Matrices normalized by CPM length
+for (t in 1:length(rna_3mr_5mi_6s_5mpr[["matrices_cpmlength"]])) {
+  table_name <- names(rna_3mr_5mi_6s_5mpr[["matrices_cpmlength"]])[t]
+  message("CPM length table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_5mi_6s_5mpr[["matrices_cpmlength"]][table_name]))
+  if (!is.null(rna_3mr_5mi_6s_5mpr[["plots"]][["matrices_cpmlength"]][[table_name]])) {
+    plot(rna_3mr_5mi_6s_5mpr[["plots"]][["matrices_cpmlength"]][[table_name]])
+  }
+}
+## Matrices normalized by counts length
+for (t in 1:length(rna_3mr_5mi_6s_5mpr[["matrices_counts"]])) {
+  table_name <- names(rna_3mr_5mi_6s_5mpr[["matrices_counts"]])[t]
+  message("Counts table: ", table_name, ".")
+  print(knitr::kable(rna_3mr_5mi_6s_5mpr[["matrices_counts"]][table_name]))
+  if (!is.null(rna_3mr_5mi_6s_5mpr[["plots"]][["matrices_counts"]][[table_name]])) {
+    plot(rna_3mr_5mi_6s_5mpr[["plots"]][["matrices_counts"]][[t]])
+  }
+}
+
+rm(rna_3mr_5mi_6s_5mpr)
+```
+
+# RNA samples
+
+## 5 min reads, 5 min tags, 6 sequencer, 5 MPR, 22<=pos<=185
+
+```{r 23rna_givesdf}
+min_reads <- 5
+
+excel <- glue("excel/{rundate}_{type}_{min_reads}minread_{min_tags}mtags_{min_sequencer}minseq_{min_position}minpos_{max_position}maxpos")
+if (!is.null(max_mutations_per_read)) {
+  excel <- glue("{excel}_{max_mutations_per_read}mpr")
+}
+if (isTRUE(prune_n)) {
+  excel <- glue("{excel}_prune")
+}
+excel <- glue("{excel}-v{ver}.xlsx")
+
+rna_5mr_5mi_6s_5mpr <- create_matrices(
+    sample_sheet=sample_sheet,
+    ident_column=ident_column,
+    mut_column=mut_column,
+    min_reads=min_reads,
+    min_tags=min_tags,
+    min_sequencer=min_sequencer,
+    max_mutations_per_read=max_mutations_per_read,
+    min_position=min_position,
+    max_position=max_position,
+    prune_n=prune_n,
+    verbose=verbose,
+    excel=excel)
+
+rna_5mr_5mi_6s_5mpr[["processed_hist"]]
+```
+
+
+```{r 24rna_mutation_tag_count, results='asis'}
+## Raw matrices
+for (t in 1:length(rna_5mr_5mi_6s_5mpr[["matrices"]])) {
+  table_name <- names(rna_5mr_5mi_6s_5mpr[["matrices"]])[t]
+  message("Raw table: ", table_name, ".")
+  print(knitr::kable(rna_5mr_5mi_6s_5mpr[["matrices"]][table_name]))
+  if (!is.null(rna_5mr_5mi_6s_5mpr[["plots"]][["matrices"]][[table_name]])) {
+    plot(rna_5mr_5mi_6s_5mpr[["plots"]][["matrices"]][[table_name]])
+  }
+}
+
+## Matrices normalized by CPM length
+for (t in 1:length(rna_5mr_5mi_6s_5mpr[["matrices_cpmlength"]])) {
+  table_name <- names(rna_5mr_5mi_6s_5mpr[["matrices_cpmlength"]])[t]
+  message("CPM length table: ", table_name, ".")
+  print(knitr::kable(rna_5mr_5mi_6s_5mpr[["matrices_cpmlength"]][table_name]))
+  if (!is.null(rna_5mr_5mi_6s_5mpr[["plots"]][["matrices_cpmlength"]][[table_name]])) {
+    plot(rna_5mr_5mi_6s_5mpr[["plots"]][["matrices_cpmlength"]][[table_name]])
+  }
+}
+## Matrices normalized by counts length
+for (t in 1:length(rna_5mr_5mi_6s_5mpr[["matrices_counts"]])) {
+  table_name <- names(rna_5mr_5mi_6s_5mpr[["matrices_counts"]])[t]
+  message("Counts table: ", table_name, ".")
+  print(knitr::kable(rna_5mr_5mi_6s_5mpr[["matrices_counts"]][table_name]))
+  if (!is.null(rna_5mr_5mi_6s_5mpr[["plots"]][["matrices_counts"]][[table_name]])) {
+    plot(rna_5mr_5mi_6s_5mpr[["plots"]][["matrices_counts"]][[t]])
+  }
+}
+
+rm(rna_5mr_5mi_6s_5mpr)
 ```
 
 # Questions from Dr. DeStefano
@@ -159,11 +746,11 @@ I think what is best is to get the number of recovered mutations of each type
 from each data set.  That would be A to T, A to G, A to C; T to A, T to G, T to
 C; G to A, G to C, G to T; and C to A, C to G, C to T; as well as deletions and
 insertions.  I would then need the sum number of the reads that met all our
-criteria (i.e. at least 3 good recovered reads for that 14 nt index).  Each set
-of 3 or more would ct as "1" read of that particular index so I would need the
+criteria (i.e. at least 3 good recovered reads for that 14 nt tag).  Each set
+of 3 or more would ct as "1" read of that particular tag so I would need the
 total with this in mind.  I also need to know the total number of nucleotides
 that were in the region we decided to consider in the analysis.  We may want to
-try this for 3 or more and 5 or more recovered indexes if it is not hard.  This
+try this for 3 or more and 5 or more recovered tags if it is not hard.  This
 information does not include specific positions on the template where errors
 occurred but we can look at that latter.  Right now I just want to get a general
 error rate and type of error.  It would basically be calculated by dividing the
@@ -176,237 +763,24 @@ deletions and insertions.
 # Answers
 
 In order to address those queries, I invoked create_matrices() with a minimum
-index count of 3 and 5.  It should be noted that this is not the same as
-requiring 3 or 5 reads per index.  In both cases I require 3 reads per index.
+tag count of 3 and 5.  It should be noted that this is not the same as
+requiring 3 or 5 reads per tag.  In both cases I require 3 reads per tag.
 
 ## Recovered mutations of each type
 
-I am interpreting this question as the number of indexes recovered for each
-mutation type.  I collect this information in 2 ways of interest: the indexes by
+I am interpreting this question as the number of tags recovered for each
+mutation type.  I collect this information in 2 ways of interest: the tags by
 type which are deemed to be from the RT and from the sequencer.  In addition, I
 calculate a normalized (cpm) version of this information which may be used to look for
 changes across samples.
 
-### Mutations by RT index
+### Mutations by RT tag
 
-This following block should print out tables of the numbers of mutant indexes
+This following block should print out tables of the numbers of mutant tags
 observed for each type for the RT and the sequencer.  One would hope that the
 sequencer will be consistent for all samples, but I think the results will
 instead suggest that my metric is not yet stringent enough.
 
-```{r mutation_index_count, results='asis'}
-knitr::kable(triples[["matrices"]][["miss_indexes_by_type"]])
-knitr::kable(triples_tenmpr[["matrices"]][["miss_indexes_by_type"]])
-knitr::kable(triples_fivempr[["matrices"]][["miss_indexes_by_type"]])
-knitr::kable(quints[["matrices"]][["miss_indexes_by_type"]])
-knitr::kable(quints_tenmpr[["matrices"]][["miss_indexes_by_type"]])
-knitr::kable(quints_fivempr[["matrices"]][["miss_indexes_by_type"]])
-
-knitr::kable(triples[["matrices"]][["miss_sequencer_by_type"]])
-knitr::kable(triples_tenmpr[["matrices"]][["miss_sequencer_by_type"]])
-knitr::kable(triples_fivempr[["matrices"]][["miss_sequencer_by_type"]])
-knitr::kable(quints[["matrices"]][["miss_sequencer_by_type"]])
-knitr::kable(quints_tenmpr[["matrices"]][["miss_sequencer_by_type"]])
-knitr::kable(quints_fivempr[["matrices"]][["miss_sequencer_by_type"]])
-```
-
-Plots of this information
-
-```{r mutation_index_count_plots}
-triples[["plots"]][["counts"]][["miss_indexes_by_type"]]
-triples_tenmpr[["plots"]][["counts"]][["miss_indexes_by_type"]]
-triples_fivempr[["plots"]][["counts"]][["miss_indexes_by_type"]]
-
-quints[["plots"]][["counts"]][["miss_indexes_by_type"]]
-quints_tenmpr[["plots"]][["counts"]][["miss_indexes_by_type"]]
-quints_fivempr[["plots"]][["counts"]][["miss_indexes_by_type"]]
-```
-
-This suggests to me that this information needs to be normalized in some more
-sensible fashion.  Thus the following:
-
-### Mutations by RT index, post normalization
-
-The same numbers may be expressed in the context of the number of indexes
-observed / sample and/or as a cpm across samples.  Thus in the first instance
-one can look at the apparent error rate for each sample, and in the second
-instance one may look for relative changes in apparent error rate across
-samples.
-
-#### Rewriting the matrices as cpm to account for library sizes.
-
-```{r mutation_index_normalized, results='asis'}
-knitr::kable(triples[["normalized"]][["miss_indexes_by_type"]])
-knitr::kable(triples_tenmpr[["normalized"]][["miss_indexes_by_type"]])
-knitr::kable(triples_fivempr[["normalized"]][["miss_indexes_by_type"]])
-knitr::kable(quints[["normalized"]][["miss_indexes_by_type"]])
-knitr::kable(quints_tenmpr[["normalized"]][["miss_indexes_by_type"]])
-knitr::kable(quints_fivempr[["normalized"]][["miss_indexes_by_type"]])
-
-knitr::kable(triples[["normalized"]][["miss_sequencer_by_type"]])
-knitr::kable(triples_tenmpr[["normalized"]][["miss_sequencer_by_type"]])
-knitr::kable(triples_fivempr[["normalized"]][["miss_sequencer_by_type"]])
-knitr::kable(quints[["normalized"]][["miss_sequencer_by_type"]])
-knitr::kable(quints_tenmpr[["normalized"]][["miss_sequencer_by_type"]])
-knitr::kable(quints_fivempr[["normalized"]][["miss_sequencer_by_type"]])
-```
-
-#### Rewriting the matrices by dividing by all indexes
-
-This I think starts to address the later text in your query.
-
-```{r mutation_index_normalized_by_counts, results='asis'}
-knitr::kable(triples[["matrices_by_counts"]][["miss_indexes_by_type"]])
-knitr::kable(quints[["matrices_by_counts"]][["miss_indexes_by_type"]])
-
-knitr::kable(triples[["matrices_by_counts"]][["miss_sequencer_by_type"]])
-knitr::kable(quints[["matrices_by_counts"]][["miss_sequencer_by_type"]])
-```
-
-#### Rewriting the matrices by dividing by all indexes and cpm
-
-I think this might prove to be where we get the most meaningful results.
-
-The nicest thing in it is that after accounting for library sizes and total
-indexes observed, we finally see that the sequencer error is mostly consistent
-across all samples and mutation types -- with a couple of notable exceptions.
-
-By the same token, for the mutations which _are_ identical for the sequencer, we
-have some which are decidedly different for the non-sequencer data.  The most
-notable examples I think are A to G but _not G to A; and C to T.
-
-```{r mutation_index_cpm_by_counts, results='asis'}
-knitr::kable(triples[["normalized_by_counts"]][["miss_indexes_by_type"]])
-knitr::kable(triples_tenmpr[["normalized_by_counts"]][["miss_indexes_by_type"]])
-knitr::kable(triples_fivempr[["normalized_by_counts"]][["miss_indexes_by_type"]])
-knitr::kable(quints[["normalized_by_counts"]][["miss_indexes_by_type"]])
-knitr::kable(quints_tenmpr[["normalized_by_counts"]][["miss_indexes_by_type"]])
-knitr::kable(quints_fivempr[["normalized_by_counts"]][["miss_indexes_by_type"]])
-
-knitr::kable(triples[["normalized_by_counts"]][["miss_sequencer_by_type"]])
-knitr::kable(triples_tenmpr[["normalized_by_counts"]][["miss_sequencer_by_type"]])
-knitr::kable(triples_fivempr[["normalized_by_counts"]][["miss_sequencer_by_type"]])
-knitr::kable(quints[["normalized_by_counts"]][["miss_sequencer_by_type"]])
-knitr::kable(quints_tenmpr[["normalized_by_counts"]][["miss_sequencer_by_type"]])
-knitr::kable(quints_fivempr[["normalized_by_counts"]][["miss_sequencer_by_type"]])
-```
-
-### Indels by RT index
-
-The following blocks will repeat the above, but looking for insertions.
-This data does not observe sufficient deletions to make a proper count for them.
-
-```{r insert_index_count, results='asis'}
-knitr::kable(triples[["matrices"]][["insert_indexes_by_nt"]])
-knitr::kable(triples_tenmpr[["matrices"]][["insert_indexes_by_nt"]])
-knitr::kable(triples_fivempr[["matrices"]][["insert_indexes_by_nt"]])
-knitr::kable(quints[["matrices"]][["insert_indexes_by_nt"]])
-knitr::kable(quints_tenmpr[["matrices"]][["insert_indexes_by_nt"]])
-knitr::kable(quints_fivempr[["matrices"]][["insert_indexes_by_nt"]])
-
-knitr::kable(triples[["matrices"]][["insert_sequencer_by_nt"]])
-knitr::kable(triples_tenmpr[["matrices"]][["insert_sequencer_by_nt"]])
-knitr::kable(triples_fivempr[["matrices"]][["insert_sequencer_by_nt"]])
-knitr::kable(quints[["matrices"]][["insert_sequencer_by_nt"]])
-knitr::kable(quints_tenmpr[["matrices"]][["insert_sequencer_by_nt"]])
-knitr::kable(quints_fivempr[["matrices"]][["insert_sequencer_by_nt"]])
-```
-
-Plots of this information
-
-```{r insert_index_count_plots}
-triples[["plots"]][["counts"]][["insert_indexes_by_nt"]]
-triples_tenmpr[["plots"]][["counts"]][["insert_indexes_by_nt"]]
-triples_fivempr[["plots"]][["counts"]][["insert_indexes_by_nt"]]
-
-quints[["plots"]][["counts"]][["insert_indexes_by_nt"]]
-quints_tenmpr[["plots"]][["counts"]][["insert_indexes_by_nt"]]
-quints_fivempr[["plots"]][["counts"]][["insert_indexes_by_nt"]]
-```
-
-### Insertions by RT index, post normalization
-
-#### Rewriting the matrices as cpm to account for library sizes.
-
-```{r insert_index_normalized, results='asis'}
-knitr::kable(triples[["normalized"]][["insert_indexes_by_nt"]])
-knitr::kable(triples_tenmpr[["normalized"]][["insert_indexes_by_nt"]])
-knitr::kable(triples_fivempr[["normalized"]][["insert_indexes_by_nt"]])
-knitr::kable(quints[["normalized"]][["insert_indexes_by_nt"]])
-knitr::kable(quints_tenmpr[["normalized"]][["insert_indexes_by_nt"]])
-knitr::kable(quints_fivempr[["normalized"]][["insert_indexes_by_nt"]])
-
-knitr::kable(triples[["normalized"]][["insert_sequencer_by_nt"]])
-knitr::kable(triples_tenmpr[["normalized"]][["insert_sequencer_by_nt"]])
-knitr::kable(triples_fivempr[["normalized"]][["insert_sequencer_by_nt"]])
-knitr::kable(quints[["normalized"]][["insert_sequencer_by_nt"]])
-knitr::kable(quints_tenmpr[["normalized"]][["insert_sequencer_by_nt"]])
-knitr::kable(quints_fivempr[["normalized"]][["insert_sequencer_by_nt"]])
-```
-
-#### Rewriting the matrices by dividing by all indexes
-
-I think that there are few enough insertion events that this gets a bit messed
-up.  I will double check the logic of this, but that is my initial guess given
-how few insertions I was seeing when reading the outputs manually.
-Unfortunately, this means that for these I also cannot provide a cpm measurement.
-
-```{r insert_index_normalized_by_counts, results='asis'}
-knitr::kable(triples[["matrices_by_counts"]][["insert_indexes_by_nt"]])
-knitr::kable(triples_tenmpr[["matrices_by_counts"]][["insert_indexes_by_nt"]])
-knitr::kable(triples_fivempr[["matrices_by_counts"]][["insert_indexes_by_nt"]])
-knitr::kable(quints[["matrices_by_counts"]][["insert_indexes_by_nt"]])
-knitr::kable(quints_tenmpr[["matrices_by_counts"]][["insert_indexes_by_nt"]])
-knitr::kable(quints_fivempr[["matrices_by_counts"]][["insert_indexes_by_nt"]])
-
-knitr::kable(triples[["matrices_by_counts"]][["insert_sequencer_by_nt"]])
-knitr::kable(triples_tenmpr[["matrices_by_counts"]][["insert_sequencer_by_nt"]])
-knitr::kable(triples_fivempr[["matrices_by_counts"]][["insert_sequencer_by_nt"]])
-knitr::kable(quints[["matrices_by_counts"]][["insert_sequencer_by_nt"]])
-knitr::kable(quints_tenmpr[["matrices_by_counts"]][["insert_sequencer_by_nt"]])
-knitr::kable(quints_fivempr[["matrices_by_counts"]][["insert_sequencer_by_nt"]])
-```
-
-The following is my previous writing of this worksheet which just dumped the
-various tables.
-
-# Print raw tables
-
-```{r raw, results='asis'}
-for (t in 1:length(triples[["matrices"]])) {
-  table_name <- names(triples[["matrices"]])[t]
-  message("Raw table: ", table_name, ".")
-  print(knitr::kable(triples[["matrices"]][t]))
-}
-```
-
-# Print raw plots
-
-```{r raw_plots}
-for (t in 1:length(triples[["plots"]][["matrices"]])) {
-  message("Raw table: ", table_name, ".")
-  print(triples[["plots"]][["matrices"]][t])
-}
-```
-
-# Print normalized tables
-
-```{r norm, results='asis'}
-for (t in 1:length(triples[["matrices_counts"]])) {
-  table_name <- names(triples[["matrices_counts"]])[t]
-  message("Normalized table: ", table_name, ".")
-  print(knitr::kable(triples[["matrices_counts"]][t]))
-}
-```
-
-# Print normalized plots
-
-```{r norm_plots}
-for (t in 1:length(triples[["plots"]][["counts"]])) {
-  message("Normalized table: ", table_name, ".")
-  print(triples[["plots"]][["counts"]][t])
-}
-```
 
 ```{r saveme}
 pander::pander(sessionInfo())
@@ -416,7 +790,6 @@ message(paste0("Saving to ", this_save))
 tmp <- sm(saveme(filename=this_save))
 ```
 
-
-```{r loadme, eval=FALSE}
+```{r loadme, eval=FALSE
 loadme(filename=this_save)
 ```
